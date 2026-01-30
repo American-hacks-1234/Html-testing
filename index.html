@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Simon's Lab 2 Style Platformer</title>
+  <style>
+    body {
+      margin: 0;
+      background: #111;
+      color: #eee;
+      font-family: sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    #ui {
+      margin: 10px;
+    }
+    canvas {
+      background: #222;
+      border: 2px solid #555;
+    }
+    button {
+      margin-left: 5px;
+    }
+  </style>
+</head>
+<body>
+  <div id="ui">
+    <span id="levelLabel">Level: 1 / 100</span>
+    <button id="resetProgress">Reset Progress</button>
+  </div>
+  <canvas id="game" width="800" height="450"></canvas>
+
+  <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const levelLabel = document.getElementById('levelLabel');
+    const resetBtn = document.getElementById('resetProgress');
+
+    const TOTAL_LEVELS = 100;
+    const STORAGE_KEY = 'platformer_max_level';
+
+    // --- Input ---
+    const keys = {
+      left: false,
+      right: false,
+      up: false
+    };
+
+    window.addEventListener('keydown', e => {
+      if (e.code === 'ArrowLeft' || e.code === 'KeyA') keys.left = true;
+      if (e.code === 'ArrowRight' || e.code === 'KeyD') keys.right = true;
+      if (e.code === 'ArrowUp' || e.code === 'Space' || e.code === 'KeyW') keys.up = true;
+    });
+
+    window.addEventListener('keyup', e => {
+      if (e.code === 'ArrowLeft' || e.code === 'KeyA') keys.left = false;
+      if (e.code === 'ArrowRight' || e.code === 'KeyD') keys.right = false;
+      if (e.code === 'ArrowUp' || e.code === 'Space' || e.code === 'KeyW') keys.up = false;
+    });
+
+    // --- Player ---
+    const player = {
+      x: 50,
+      y: 0,
+      w: 30,
+      h: 40,
+      vx: 0,
+      vy: 0,
+      speed: 4,
+      jumpPower: 11,
+      onGround: false
+    };
+
+    // --- Physics ---
+    const gravity = 0.6;
+    const friction = 0.8;
+
+    // --- Level data ---
+    let currentLevel = 1;
+    let maxUnlockedLevel = 1;
+    let platforms = [];
+    let goal = { x: 700, y: 350, w: 30, h: 50 };
+
+    function loadProgress() {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        maxUnlockedLevel = Math.min(TOTAL_LEVELS, parseInt(saved, 10) || 1);
+        currentLevel = maxUnlockedLevel;
+      } else {
+        maxUnlockedLevel = 1;
+        currentLevel = 1;
+      }
+    }
+
+    function saveProgress() {
+      localStorage.setItem(STORAGE_KEY, String(maxUnlockedLevel));
+    }
+
+    resetBtn.addEventListener('click', () => {
+      localStorage.removeItem(STORAGE_KEY);
+      maxUnlockedLevel = 1;
+      currentLevel = 1;
+      loadLevel(currentLevel);
+    });
+
+    // Generate simple platforms for a given level index
+    function generateLevel(levelIndex) {
+      const plats = [];
+
+      // Base ground
+      plats.push({ x: 0, y: 400, w: 800, h: 50 });
+
+      // A few floating platforms that get trickier with level
+      const difficulty = Math.min(10, Math.floor(levelIndex / 10) + 1);
+      for (let i = 0; i < difficulty; i++) {
+        const w = 100;
+        const h = 15;
+        const x = 80 + i * (600 / difficulty);
+        const y = 350 - i * 20 - (levelIndex % 5) * 5;
+        plats.push({ x, y, w, h });
+      }
+
+      // Goal moves further right and slightly up as levels increase
+      const goalX = 650 + (levelIndex % 5) * 10;
+      const goalY = 350 - (levelIndex % 7) * 5;
+
+      return {
+        platforms: plats,
+        goal: { x: goalX, y: goalY, w: 30, h: 50 },
+        spawn: { x: 40, y: 350 }
+      };
+    }
+
+    function loadLevel(levelNum) {
+      const data = generateLevel(levelNum - 1);
+      platforms = data.platforms;
+      goal = data.goal;
+      player.x = data.spawn.x;
+      player.y = data.spawn.y;
+      player.vx = 0;
+      player.vy = 0;
+      player.onGround = false;
+      levelLabel.textContent = `Level: ${levelNum} / ${TOTAL_LEVELS}`;
+    }
+
+    function rectIntersect(a, b) {
+      return (
+        a.x < b.x + b.w &&
+        a.x + a.w > b.x &&
+        a.y < b.y + b.h &&
+        a.y + a.h > b.y
+      );
+    }
+
+    function update() {
+      // Horizontal movement
+      if (keys.left) {
+        player.vx = -player.speed;
+      } else if (keys.right) {
+        player.vx = player.speed;
+      } else {
+        player.vx *= friction;
+      }
+
+      // Jump
+      if (keys.up && player.onGround) {
+        player.vy = -player.jumpPower;
+        player.onGround = false;
+      }
+
+      // Gravity
+      player.vy += gravity;
+
+      // Apply movement
+      player.x += player.vx;
+      player.y += player.vy;
+
+      // World bounds
+      if (player.x < 0) player.x = 0;
+      if (player.x + player.w > canvas.width) player.x = canvas.width - player.w;
+      if (player.y > canvas.height + 200) {
+        // Fell off: reset level
+        loadLevel(currentLevel);
+      }
+
+      // Collision with platforms
+      player.onGround = false;
+      for (const p of platforms) {
+        const future = {
+          x: player.x,
+          y: player.y,
+          w: player.w,
+          h: player.h
+        };
+        if (rectIntersect(future, p)) {
+          // Simple resolution: check vertical
+          const prevBottom = player.y - player.vy + player.h;
+          const prevTop = player.y - player.vy;
+          if (prevBottom <= p.y && player.vy >= 0) {
+            // Landed on top
+            player.y = p.y - player.h;
+            player.vy = 0;
+            player.onGround = true;
+          } else if (prevTop >= p.y + p.h && player.vy <= 0) {
+            // Hit from below
+            player.y = p.y + p.h;
+            player.vy = 0;
+          } else if (player.x + player.w / 2 < p.x + p.w / 2) {
+            // Hit from left
+            player.x = p.x - player.w;
+            player.vx = 0;
+          } else {
+            // Hit from right
+            player.x = p.x + p.w;
+            player.vx = 0;
+          }
+        }
+      }
+
+      // Check goal
+      const playerRect = { x: player.x, y: player.y, w: player.w, h: player.h };
+      if (rectIntersect(playerRect, goal)) {
+        if (currentLevel < TOTAL_LEVELS) {
+          currentLevel++;
+          if (currentLevel > maxUnlockedLevel) {
+            maxUnlockedLevel = currentLevel;
+            saveProgress();
+          }
+          loadLevel(currentLevel);
+        } else {
+          // Finished all levels
+          alert('You beat all 100 levels!');
+          currentLevel = TOTAL_LEVELS;
+          loadLevel(currentLevel);
+        }
+      }
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Background
+      ctx.fillStyle = '#111';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Platforms
+      ctx.fillStyle = '#444';
+      for (const p of platforms) {
+        ctx.fillRect(p.x, p.y, p.w, p.h);
+      }
+
+      // Goal
+      ctx.fillStyle = '#0f0';
+      ctx.fillRect(goal.x, goal.y, goal.w, goal.h);
+
+      // Player
+      ctx.fillStyle = '#f44';
+      ctx.fillRect(player.x, player.y, player.w, player.h);
+    }
+
+    function loop() {
+      update();
+      draw();
+      requestAnimationFrame(loop);
+    }
+
+    // Init
+    loadProgress();
+    loadLevel(currentLevel);
+    loop();
+  </script>
+</body>
+</html>
